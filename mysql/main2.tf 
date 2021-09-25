@@ -1,0 +1,105 @@
+## proveedor 
+//AWS
+
+variable "aws_user_access_key"{
+    value = var.my_access_key
+}
+
+variable "aws_user_secret_key"{
+    value = var.my_secret_key
+}
+
+
+provider "aws"{
+    region= "${var.aws_region}"
+    access_key = "${var.aws_user_access_key}"
+	secret_key = "${var.aws_user_secret_key}"
+}
+
+##creacion de segurity group
+
+resource "aws_segurity_group" "SG-TPO-ARQ-HTTP" {
+    name = "SG-TPO-ARQ"
+    description = "segurity group creado para TPO"
+
+    //HTTP
+    ingress {
+        from_port = 80
+        to_poort = 80
+        protocol = "tcp"
+        cidr_bloks = ["0.0.0.0./0"]
+    }
+
+    //Salida Internet 
+    egress{
+        from_port = 0
+        to_poort = 0
+        protocol = "-1"
+        cidr_bloks = ["0.0.0.0./0"]
+    }
+}
+
+##listar AZ
+
+// Retorna las AZ
+data "aws_availability_zones" "all_zones" {}
+
+## Crear LB en todas las AZ
+
+resource "aws_elb" "tpo_elb" {
+    name = tpo-elb
+    availability_zones = ["${data.aws_availability_zones.all_zones.names}"]
+    segurity_group ={"${aws_segurity_group.SG-TPO-ARQ.id}"}
+
+    listener {
+        intance_port = 80
+        intance_protocol = "http"
+        lb_port = 80
+        lb_protocol = "http"
+    }
+
+    health_check{
+        healthy_threshold = 2
+        unhealthy_threshold = 2
+        timeout = 4
+        target = "HTTP:80/"
+        interval = 30
+    }
+}
+
+##Configuration Launcher
+
+//lanza intancias ec2
+
+resource "aws_lauch_configuration" "tpo_lc"{
+    name = "tpo_lc"
+    image_id = "${lookup(var.aws_ami, var.aws_region)}" //toma los valores de variables
+    intance_type = ["${aws_segurity_group.SG-TPO-ARQ.id}"] 
+
+    ##si es necesario correr un userdata
+    userdata = "${file("start.sh")}"
+
+    ##SSH KEY
+    key_name = "${lookup(var.key_name, var.aws_region)}"
+
+}
+
+
+resource "aws_autoscaling_group" "TPO_asg"{
+    name = "TPO_asg"
+    availability_zones = ["${data.aws_availability_zones.all_zones.names}"]
+    min_size = "${var.asg_min}"
+    max_size = "${var.asg_max}"
+    desired_capacity= "${var.asg_desired}"
+    force_delete = true
+
+    lauch_configuration = "${aws_lauch_configuration.tpo_lc.name}"
+
+    load_balancers = ["${aws_elb.tpo_elb.name}"]
+
+    tag {
+        key = "Name"
+        value = " TPO-ARG"
+        propagate_at_lauch = "true"
+    }
+}
